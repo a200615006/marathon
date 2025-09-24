@@ -1,0 +1,12 @@
+python-docx
+PyMuPDF
+pdfplumber
+lxml
+langchain
+markdown
+beautifulsoup4
+openpyxl
+sentence_transformers
+pymilvus
+elasticsearch
+pymilvus[milvus_lite]
