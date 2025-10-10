@@ -3,9 +3,8 @@
 
 ### 基本环境信息
 
-python==3.11
-numpy==1.26.4
-pytorch==2.6.0+cu124
+python==3.12
+pytorch==2.8.0+cu128
 
 ### vLLM
 
