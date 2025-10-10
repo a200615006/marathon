@@ -1,0 +1,5 @@
+.idea/
+rag-baseline/documents_output/
+rag-baseline/chunks_output/
+__pycache__/
+.ipynb_checkpoints/
