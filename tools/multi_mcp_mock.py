@@ -108,11 +108,88 @@ class EnhancedMockHttpServer:
         app.run(port=8000, debug=False)
 
 
+def create_example_tools(tools_directory):
+    """创建支持多次调用的示例工具"""
+    os.makedirs(tools_directory, exist_ok=True)
+
+    # 数据查询工具链示例
+    user_query_tool = """
+name: query_user_data
+description: 根据用户ID查询用户基本信息
+http_url: http://localhost:8000/api/users
+http_method: GET
+parameters:
+  user_id: 用户ID
+required: user_id
+"""
+
+    order_query_tool = """
+name: query_user_orders
+description: 根据用户ID查询用户的订单信息
+http_url: http://localhost:8000/api/orders
+http_method: GET
+parameters:
+  user_id: 用户ID
+required: user_id
+"""
+
+    product_query_tool = """
+name: query_product_details
+description: 根据产品ID查询产品详细信息
+http_url: http://localhost:8000/api/products
+http_method: GET
+parameters:
+  product_id: 产品ID
+required: product_id
+"""
+
+    weather_tool = """
+name: get_weather
+description: 获取多个城市的天气信息进行比较
+http_url: http://localhost:8000/api/weather
+http_method: GET
+parameters:
+  cities: 城市名称列表，用逗号分隔
+required: cities
+"""
+
+    analysis_tool = """
+name: analyze_data
+description: 对提供的数据进行分析和总结
+http_url: http://localhost:8000/api/analyze
+http_method: POST
+parameters:
+  data: 需要分析的数据
+  analysis_type: 分析类型，如comparison, summary, trend
+required: data, analysis_type
+"""
+
+    # 写入文件
+    tools_content = [
+        ("user_query_tool.txt", user_query_tool),
+        ("order_query_tool.txt", order_query_tool),
+        ("product_query_tool.txt", product_query_tool),
+        ("weather_tool.txt", weather_tool),
+        ("analysis_tool.txt", analysis_tool)
+    ]
+
+    for filename, content in tools_content:
+        with open(os.path.join(tools_directory, filename), "w", encoding="utf-8") as f:
+            f.write(content)
+
+    print("📁 示例工具文件已创建")
+
+
 def run_mock_server():
     """运行模拟HTTP服务器"""
     EnhancedMockHttpServer.run_mock_server()
 
 
 if __name__ == "__main__":
+    tools_directory="mcp_tools"
+    if not os.path.exists(tools_directory):
+        print(f"⚠️ 工具目录 '{tools_directory}' 不存在，创建示例工具...")
+        create_example_tools(tools_directory)
+
     # 如果要运行模拟服务器，取消下面的注释
     run_mock_server()
