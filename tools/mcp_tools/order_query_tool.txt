@@ -1,0 +1,8 @@
+
+name: query_user_orders
+description: 根据用户ID查询用户的订单信息
+http_url: http://localhost:8000/api/orders
+http_method: GET
+parameters:
+  user_id: 用户ID
+required: user_id

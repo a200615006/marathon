@@ -1,0 +1,8 @@
+
+name: query_product_details
+description: 根据产品ID查询产品详细信息
+http_url: http://localhost:8000/api/products
+http_method: GET
+parameters:
+  product_id: 产品ID
+required: product_id

@@ -1,0 +1,8 @@
+
+name: query_user_data
+description: 根据用户ID查询用户基本信息
+http_url: http://localhost:8000/api/users
+http_method: GET
+parameters:
+  user_id: 用户ID
+required: user_id

@@ -5,10 +5,44 @@ import requests
 import time
 from typing import List, Dict, Any, Optional, Tuple
 from openai import OpenAI
+from fastapi import FastAPI, HTTPException, Query, Body
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import uvicorn
+from datetime import datetime
+
+
+class ToolRequest(BaseModel):
+    """工具调用请求模型"""
+    tool_name: str
+    arguments: Dict[str, Any]
+
+
+class UserQuery(BaseModel):
+    """用户查询请求模型"""
+    query: str
+    max_iterations: int = 5
+
+
+class ToolResponse(BaseModel):
+    """工具调用响应模型"""
+    success: bool
+    result: str
+    tool_name: str
+    duration: float
+
+
+class QueryResponse(BaseModel):
+    """查询响应模型"""
+    success: bool
+    response: str
+    tool_calls: List[Dict[str, Any]]
+    total_iterations: int
 
 
 class AdvancedMCPHttpToolManager:
-    def __init__(self, api_key: str, base_url: str = None, tools_directory: str = "mcp_tools", max_iterations: int = 5, headers: str = None):
+    def __init__(self, api_key: str, base_url: str = None, tools_directory: str = "mcp_tools", max_iterations: int = 5,
+                 headers: Dict[str, str] = None):
         """
         高级MCP HTTP工具管理器，支持多次调用和多个工具
 
@@ -17,6 +51,7 @@ class AdvancedMCPHttpToolManager:
             base_url: OpenAI API基础URL
             tools_directory: MCP工具描述文件目录
             max_iterations: 最大迭代次数，防止无限循环
+            headers: HTTP请求头
         """
         client_args = {"api_key": api_key}
         if base_url:
@@ -29,13 +64,17 @@ class AdvancedMCPHttpToolManager:
         self.tools = self.load_tools_from_files()
         self.conversation_history = []
         self.call_log = []  # 记录所有工具调用
-        self.headers = headers
+        self.headers = headers or {}
 
-        # print(json.dumps(self.tools, indent=4, ensure_ascii=False))
+        print(f"📊 总共加载了 {len(self.tools)} 个工具")
 
     def load_tools_from_files(self) -> List[Dict[str, Any]]:
         """从文本文件加载MCP工具描述"""
         tools = []
+
+        if not os.path.exists(self.tools_directory):
+            print(f"⚠️ 工具目录不存在: {self.tools_directory}")
+            return tools
 
         for filename in os.listdir(self.tools_directory):
             if filename.endswith(('.txt', '.json')):
@@ -48,7 +87,6 @@ class AdvancedMCPHttpToolManager:
                 except Exception as e:
                     print(f"❌ 加载工具文件 {filename} 时出错: {e}")
 
-        print(f"📊 总共加载了 {len(tools)} 个工具")
         return tools
 
     def parse_tool_file(self, file_path: str) -> Optional[Dict[str, Any]]:
@@ -138,42 +176,64 @@ class AdvancedMCPHttpToolManager:
             "http_config": tool_info['http_config']
         }
 
-    def call_http_service(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        """调用本地HTTP服务"""
-        tool_config = None
-        for tool in self.tools:
-            if tool['function']['name'] == tool_name and 'http_config' in tool:
-                tool_config = tool
-                break
-
-        if not tool_config:
-            return f"错误: 未找到工具 '{tool_name}' 的配置"
-
-        http_config = tool_config['http_config']
-        url = http_config.get('url')
-        method = http_config.get('method', 'GET')
-
-        if not url:
-            return f"错误: 工具 '{tool_name}' 未配置HTTP URL"
+    def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> ToolResponse:
+        """调用工具并返回标准化响应"""
+        call_start = time.time()
 
         try:
+            tool_config = None
+            for tool in self.tools:
+                if tool['function']['name'] == tool_name and 'http_config' in tool:
+                    tool_config = tool
+                    break
+
+            if not tool_config:
+                error_msg = f"未找到工具 '{tool_name}' 的配置"
+                return ToolResponse(
+                    success=False,
+                    result=error_msg,
+                    tool_name=tool_name,
+                    duration=time.time() - call_start
+                )
+
+            http_config = tool_config['http_config']
+            url = http_config.get('url')
+            method = http_config.get('method', 'GET')
+
+            if not url:
+                error_msg = f"工具 '{tool_name}' 未配置HTTP URL"
+                return ToolResponse(
+                    success=False,
+                    result=error_msg,
+                    tool_name=tool_name,
+                    duration=time.time() - call_start
+                )
+
             print(f"🌐 调用HTTP服务: {method} {url}")
             print(f"📤 请求参数: {arguments}")
 
-            # 记录调用开始
-            call_start = time.time()
+            # 准备请求头
+            headers = {**self.headers}
+            if method in ['POST', 'PUT'] and 'Content-Type' not in headers:
+                headers['Content-Type'] = 'application/json'
 
             # 根据HTTP方法调用服务
             if method == 'GET':
-                response = requests.get(url, params=arguments, timeout=30)
+                response = requests.get(url, params=arguments, headers=headers, timeout=30)
             elif method == 'POST':
-                response = requests.post(url, json=arguments, timeout=30)
+                response = requests.post(url, json=arguments, headers=headers, timeout=30)
             elif method == 'PUT':
-                response = requests.put(url, json=arguments, timeout=30)
+                response = requests.put(url, json=arguments, headers=headers, timeout=30)
             elif method == 'DELETE':
-                response = requests.delete(url, params=arguments, timeout=30)
+                response = requests.delete(url, params=arguments, headers=headers, timeout=30)
             else:
-                return f"错误: 不支持的HTTP方法 {method}"
+                error_msg = f"不支持的HTTP方法 {method}"
+                return ToolResponse(
+                    success=False,
+                    result=error_msg,
+                    tool_name=tool_name,
+                    duration=time.time() - call_start
+                )
 
             call_duration = time.time() - call_start
 
@@ -183,7 +243,7 @@ class AdvancedMCPHttpToolManager:
                 "arguments": arguments,
                 "status_code": response.status_code,
                 "duration": round(call_duration, 2),
-                "timestamp": time.time()
+                "timestamp": datetime.now().isoformat()
             }
             self.call_log.append(call_log)
 
@@ -191,38 +251,74 @@ class AdvancedMCPHttpToolManager:
                 result = response.json() if 'application/json' in response.headers.get('content-type',
                                                                                        '') else response.text
                 print(f"✅ HTTP调用成功 (耗时: {call_duration:.2f}s)")
-                return str(result)
+                return ToolResponse(
+                    success=True,
+                    result=str(result),
+                    tool_name=tool_name,
+                    duration=call_duration
+                )
             else:
                 error_msg = f"HTTP错误 {response.status_code}: {response.text}"
                 print(f"❌ {error_msg}")
-                return error_msg
+                return ToolResponse(
+                    success=False,
+                    result=error_msg,
+                    tool_name=tool_name,
+                    duration=call_duration
+                )
 
         except requests.exceptions.Timeout:
-            error_msg = f"HTTP请求超时: {url}"
+            error_msg = f"HTTP请求超时"
+            call_duration = time.time() - call_start
             print(f"⏰ {error_msg}")
-            return error_msg
+            return ToolResponse(
+                success=False,
+                result=error_msg,
+                tool_name=tool_name,
+                duration=call_duration
+            )
         except requests.exceptions.ConnectionError:
-            error_msg = f"无法连接到HTTP服务: {url}"
+            error_msg = f"无法连接到HTTP服务"
+            call_duration = time.time() - call_start
             print(f"🔌 {error_msg}")
-            return error_msg
+            return ToolResponse(
+                success=False,
+                result=error_msg,
+                tool_name=tool_name,
+                duration=call_duration
+            )
         except Exception as e:
             error_msg = f"HTTP调用异常: {str(e)}"
+            call_duration = time.time() - call_start
             print(f"🚨 {error_msg}")
-            return error_msg
+            return ToolResponse(
+                success=False,
+                result=error_msg,
+                tool_name=tool_name,
+                duration=call_duration
+            )
 
-    def process_user_query(self, user_query: str) -> str:
+    def process_user_query(self, user_query: str, max_iterations: int = None) -> QueryResponse:
         """
         处理用户查询，支持多次工具调用和多个工具
 
-        返回:
-            str: 最终回复内容
+        Args:
+            user_query: 用户查询
+            max_iterations: 最大迭代次数
+
+        Returns:
+            QueryResponse: 处理结果
         """
+        if max_iterations is None:
+            max_iterations = self.max_iterations
+
         messages = self.conversation_history + [{"role": "user", "content": user_query}]
         iteration_count = 0
+        tool_calls_info = []
 
         print(f"\n🔍 开始处理查询: {user_query}")
 
-        while iteration_count < self.max_iterations:
+        while iteration_count < max_iterations:
             iteration_count += 1
             print(f"\n🔄 第 {iteration_count} 轮处理")
 
@@ -231,11 +327,14 @@ class AdvancedMCPHttpToolManager:
                 available_tools = [{k: v for k, v in tool.items() if k != 'http_config'} for tool in self.tools]
 
                 response = self.client.chat.completions.create(
-                    model="qwen-plus",
+                    model="qwen3-32b",
                     messages=messages,
                     tools=available_tools if available_tools else None,
                     tool_choice="auto" if available_tools else "none",
-                    timeout=30.0
+                    timeout=30.0,
+                    extra_body={
+                        "enable_thinking": False  # 禁用思考过程
+                    }
                 )
 
                 response_message = response.choices[0].message
@@ -251,8 +350,13 @@ class AdvancedMCPHttpToolManager:
                         {"role": "user", "content": user_query},
                         {"role": "assistant", "content": final_reply}
                     ])
-
-                    return final_reply
+                    # todo
+                    return QueryResponse(
+                        success=True,
+                        response=final_reply,
+                        tool_calls=tool_calls_info,
+                        total_iterations=iteration_count
+                    )
 
                 # 处理工具调用
                 print(f"🔧 模型决定调用 {len(tool_calls)} 个工具")
@@ -265,18 +369,26 @@ class AdvancedMCPHttpToolManager:
 
                     print(f"🛠️ 调用工具 [{function_name}]: {function_args}")
 
-                    # 调用HTTP服务
-                    tool_result = self.call_http_service(function_name, function_args)
+                    # 调用工具
+                    tool_result = self.call_tool(function_name, function_args)
+
+                    # 记录工具调用信息
+                    tool_calls_info.append({
+                        "tool_name": function_name,
+                        "arguments": function_args,
+                        "success": tool_result.success,
+                        "duration": tool_result.duration
+                    })
 
                     # 将工具结果添加到消息中
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
-                        "content": tool_result,
+                        "content": tool_result.result,
                     })
 
                 # 检查是否应该继续迭代
-                if iteration_count >= self.max_iterations:
+                if iteration_count >= max_iterations:
                     print("⚠️ 达到最大迭代次数，生成最终回复")
                     break
 
@@ -289,13 +401,13 @@ class AdvancedMCPHttpToolManager:
         # 生成最终回复
         try:
             final_response = self.client.chat.completions.create(
-                model="qwen-plus",
+                model="qwen3-32b",
                 messages=messages,
                 timeout=30.0
             )
 
             final_content = final_response.choices[0].message.content
-            print(f"✅ 处理完成，共进行 {iteration_count} 轮，调用 {len(self.call_log)} 次工具")
+            print(f"✅ 处理完成，共进行 {iteration_count} 轮，调用 {len(tool_calls_info)} 次工具")
 
             # 更新对话历史
             self.conversation_history.extend([
@@ -303,10 +415,21 @@ class AdvancedMCPHttpToolManager:
                 {"role": "assistant", "content": final_content}
             ])
 
-            return final_content
+            return QueryResponse(
+                success=True,
+                response=final_content,
+                tool_calls=tool_calls_info,
+                total_iterations=iteration_count
+            )
 
         except Exception as e:
-            return f"生成最终回复时出错: {e}"
+            error_msg = f"生成最终回复时出错: {e}"
+            return QueryResponse(
+                success=False,
+                response=error_msg,
+                tool_calls=tool_calls_info,
+                total_iterations=iteration_count
+            )
 
     def get_call_statistics(self) -> Dict[str, Any]:
         """获取工具调用统计信息"""
@@ -325,85 +448,138 @@ class AdvancedMCPHttpToolManager:
             "total_calls": len(self.call_log),
             "unique_tools": len(tool_usage),
             "tools_used": tool_usage,
-            "average_duration": round(sum(call["duration"] for call in self.call_log) / len(self.call_log), 2)
+            "average_duration": round(sum(call["duration"] for call in self.call_log) / len(self.call_log),
+                                      2) if self.call_log else 0
         }
 
+    def get_available_tools(self) -> List[Dict[str, Any]]:
+        """获取可用工具列表"""
+        return [
+            {
+                "name": tool['function']['name'],
+                "description": tool['function']['description'],
+                "parameters": tool['function']['parameters']
+            }
+            for tool in self.tools
+        ]
 
-# 使用示例和测试
-def main():
-    # 初始化高级MCP工具管理器
+
+# FastAPI 应用
+app = FastAPI(
+    title="MCP工具服务API",
+    description="基于FastAPI的MCP工具调用服务",
+    version="1.0.0"
+)
+
+# CORS中间件
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 全局工具管理器实例
+tool_manager = None
+
+
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时初始化工具管理器"""
+    global tool_manager
     tool_manager = AdvancedMCPHttpToolManager(
         api_key=os.getenv("DASHSCOPE_API_KEY"),
-        base_url=os.getenv("DASHSCOPE_URL"),  # 如果需要代理，请设置base_url
+        base_url=os.getenv("DASHSCOPE_URL"),
         tools_directory="mcp_tools",
         max_iterations=5,
-        headers = {
-            "X-App-Id": "app_id",
-            "X-App-Key": "app_key",
+        headers={
+            "X-App-Id": os.getenv("your_app_id"),
+            "X-App-Key": os.getenv("your_app_key"),
             "Content-Type": "application/json"
         }
     )
-
-    # 测试复杂查询（需要多次调用多个工具）
-    test_queries = [
-        # 简单查询 - 可能直接回答
-        # "你好，请介绍一下你自己",
-        #
-        # # 需要单次工具调用
-        # "查询用户1的基本信息",
-        #
-        # # 需要多次工具调用（先查用户，再查订单）
-        # "请分析用户1的购买行为和订单情况",
-        #
-        # # 需要多个工具调用（用户信息 + 订单 + 产品详情）
-        # "请给我用户2的完整信息，包括他的订单和购买的产品详情",
-        #
-        # # 需要多次调用的复杂分析
-        # "比较北京、上海、广州三个城市的天气情况",
-
-        "查询用户1和用户2的信息",
-
-        "查询用户1的信息和上海的天气"
+    print("🚀 MCP工具管理器初始化完成")
 
 
-        # 链式调用
-        # "先查询用户1的信息，然后根据他的订单查看产品详情，最后做个总结",
-        
-        # "查看上海的天气，如果是晴天的话查询用户1的信息，否则查询用户2的信息,总结输出",
-
-        # "今天上海的天气分析总结一下"
-    ]
-
-    print("🤖 高级MCP HTTP工具管理器已就绪")
-    print("=" * 60)
-
-    for i, query in enumerate(test_queries, 1):
-        print(f"\n🧪 测试用例 {i}/{len(test_queries)}")
-        print(f"👤 用户提问: {query}")
-        print("-" * 50)
-
-        # 清空调用日志（可选）
-        tool_manager.call_log = []
-
-        response = tool_manager.process_user_query(query)
-        print(f"🤖 AI回复: {response}")
-
-        # 显示调用统计
-        stats = tool_manager.get_call_statistics()
-        if stats["total_calls"] > 0:
-            print(f"📊 工具调用统计: {stats}")
-
-        print("=" * 60)
+@app.get("/")
+async def root():
+    """根端点"""
+    return {
+        "message": "MCP工具服务API",
+        "status": "running",
+        "timestamp": datetime.now().isoformat()
+    }
 
 
-def run_mock_server():
-    """运行模拟HTTP服务器"""
-    EnhancedMockHttpServer.run_mock_server()
+@app.get("/tools")
+async def get_available_tools():
+    """获取可用工具列表"""
+    if not tool_manager:
+        raise HTTPException(status_code=500, detail="工具管理器未初始化")
+
+    tools = tool_manager.get_available_tools()
+    return {
+        "success": True,
+        "tools": tools,
+        "total_tools": len(tools)
+    }
+
+
+@app.post("/tools/call", response_model=ToolResponse)
+async def call_tool(request: ToolRequest):
+    """直接调用指定工具"""
+    if not tool_manager:
+        raise HTTPException(status_code=500, detail="工具管理器未初始化")
+
+    try:
+        result = tool_manager.call_tool(request.tool_name, request.arguments)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"工具调用失败: {str(e)}")
+
+
+@app.post("/query", response_model=QueryResponse)
+async def process_query(request: UserQuery):
+    """处理用户查询，可能涉及多个工具调用"""
+    if not tool_manager:
+        raise HTTPException(status_code=500, detail="工具管理器未初始化")
+
+    try:
+        result = tool_manager.process_user_query(request.query, request.max_iterations)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询处理失败: {str(e)}")
+
+
+@app.get("/statistics")
+async def get_statistics():
+    """获取工具调用统计信息"""
+    if not tool_manager:
+        raise HTTPException(status_code=500, detail="工具管理器未初始化")
+
+    stats = tool_manager.get_call_statistics()
+    return {
+        "success": True,
+        "statistics": stats
+    }
+
+
+@app.get("/health")
+async def health_check():
+    """健康检查端点"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "tools_loaded": len(tool_manager.tools) if tool_manager else 0
+    }
 
 
 if __name__ == "__main__":
-    # 如果要运行模拟服务器，取消下面的注释
-    #run_mock_server()
-
-    # 运行主程序
-    main()
+    # 启动FastAPI服务器
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=10003,
+        log_level="info"
+    )

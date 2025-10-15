@@ -1,0 +1,8 @@
+
+name: get_weather
+description: 获取多个城市的天气信息进行比较
+http_url: http://localhost:8000/api/weather
+http_method: GET
+parameters:
+  cities: 城市名称列表，用逗号分隔
+required: cities

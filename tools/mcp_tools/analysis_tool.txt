@@ -1,0 +1,9 @@
+
+name: analyze_data
+description: 对提供的数据进行分析和总结
+http_url: http://localhost:8000/api/analyze
+http_method: POST
+parameters:
+  data: 需要分析的数据
+  analysis_type: 分析类型，如comparison, summary, trend
+required: data, analysis_type
