@@ -130,5 +130,6 @@ if __name__ == "__main__":
         app,
         host="0.0.0.0",
         port=10002,
-        log_level="info"
+        log_level="info",
+        workers=10
     )

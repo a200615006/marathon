@@ -328,15 +328,11 @@ class AdvancedMCPHttpToolManager:
     def process_user_query(self, question: str, content: str) -> QueryResponse:
         """
         处理用户查询，支持多次工具调用和多个工具
-
         Args:
             question: 用户查询
             content: 选项
-
-        Returns:
-            QueryResponse: 处理结果
+        Returns: QueryResponse: 处理结果
         """
-
         max_iterations = self.max_iterations
         prompt = [{
             "role": "system",
@@ -352,7 +348,7 @@ class AdvancedMCPHttpToolManager:
             messages = self.conversation_history + prompt + [{"role": "user", "content": question + " \n" + content}]
         else:
             messages = self.conversation_history + [{"role": "user", "content": question}]
-        print(f"messages={messages} | question={question}")
+        # print(f"messages={messages} | question={question}")
 
         iteration_count = 0
         tool_call_count = 0
@@ -367,6 +363,8 @@ class AdvancedMCPHttpToolManager:
             try:
                 # 准备工具列表（移除http_config）
                 available_tools = [{k: v for k, v in tool.items() if k != 'http_config'} for tool in self.tools]
+
+                print(f"iteration_count={iteration_count} | messages={messages} | question={question}")
 
                 response = self.client.chat.completions.create(
                     model="qwen3-32b",
@@ -432,6 +430,11 @@ class AdvancedMCPHttpToolManager:
                     function_name = tool_call.function.name
                     function_args = json.loads(tool_call.function.arguments)
 
+                    if function_name == "nl2sql_tool":
+                        function_args = {
+                            "question": question
+                        }
+
                     print(f"🛠️ 调用工具 [{function_name}]: {function_args}")
 
                     # 调用工具
@@ -468,6 +471,7 @@ class AdvancedMCPHttpToolManager:
 
         # 生成最终回复
         try:
+            print(f"iteration_count={iteration_count} | messages={messages} | question={question}")
             final_response = self.client.chat.completions.create(
                 model="qwen3-32b",
                 messages=messages,
