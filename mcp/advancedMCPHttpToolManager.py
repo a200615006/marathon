@@ -44,14 +44,7 @@ class AdvancedMCPHttpToolManager:
 
         # 然后加载工具文件
         self.tools = self.load_tools_from_files()
-        # self.conversation_history = [{
-        #     "role": "system",
-        #     "content": """你是一个专业的AI助手。请遵循以下指导原则：
-        #         1. 回答要准确、简洁、有用
-        #         2. 如果使用工具，请确保提供完整的参数
-        #         3. 如果用户传入的req_content不为空，请返回选项A、B、C、D等
-        #         """
-        # }]
+
         self.conversation_history = []
         self.call_log = []  # 记录所有工具调用
         self.headers = headers or {}
@@ -332,27 +325,40 @@ class AdvancedMCPHttpToolManager:
                 duration=call_duration
             )
 
-    def process_user_query(self, user_query: str, req_content: str) -> QueryResponse:
+    def process_user_query(self, question: str, content: str) -> QueryResponse:
         """
         处理用户查询，支持多次工具调用和多个工具
 
         Args:
-            user_query: 用户查询
-            max_iterations: 最大迭代次数
+            question: 用户查询
+            content: 选项
 
         Returns:
             QueryResponse: 处理结果
         """
 
         max_iterations = self.max_iterations
+        prompt = [{
+            "role": "system",
+            "content": """你是一个专业的选择题回答助手。请遵循以下指导原则：
+                       1. 根据问题和选项选择出正确答案
+                       2. 如果使用工具，请确保提供完整的参数
+                       3. 返回答案只返回选项，如A、B、C、D等
+                       """
+        }]
+        if content:
+            messages = self.conversation_history + prompt + [{"role": "user", "content": question + " \n" + content}]
+        else:
+            messages = self.conversation_history  + [{"role": "user", "content": question}]
+        print(messages)
 
-        messages = self.conversation_history + [{"role": "user", "content": user_query}]
         iteration_count = 0
+        tool_call_count = 0
         tool_calls_info = []
 
-        print(f"\n🔍 开始处理查询: {user_query}")
+        print(f"\n🔍 开始处理查询: {question}")
 
-        while iteration_count < max_iterations:
+        while tool_call_count < max_iterations:
             iteration_count += 1
             print(f"\n🔄 第 {iteration_count} 轮处理")
 
@@ -374,27 +380,49 @@ class AdvancedMCPHttpToolManager:
                 response_message = response.choices[0].message
                 tool_calls = response_message.tool_calls
 
+                final_reply = response_message.content
                 # 如果没有工具调用，直接返回结果
                 if not tool_calls:
-                    final_reply = response_message.content
-                    print(f"💬 模型选择直接回复 (第{iteration_count}轮)")
+                    print(f"💬 无可用工具调用 | 模型选择直接回复 (第{iteration_count}轮)")
 
                     # 更新对话历史
                     self.conversation_history.extend([
-                        {"role": "user", "content": user_query},
+                        {"role": "user", "content": question},
                         {"role": "assistant", "content": final_reply}
                     ])
 
+                    if tool_call_count == 0:
+                        return QueryResponse(
+                            code="1",
+                            success=True,
+                            response=final_reply,
+                            tool_calls=tool_calls_info,
+                            total_iterations=iteration_count
+                        )
+                    else:
+                        return QueryResponse(
+                            code="0",
+                            success=True,
+                            response=final_reply,
+                            tool_calls=tool_calls_info,
+                            total_iterations=iteration_count
+                        )
+
+                # 处理工具调用
+                tool_call_count += 1
+
+                # 检查是否应该继续迭代
+                if tool_call_count > max_iterations:
+                    print("⚠️ 达到最大工具调用次数，生成最终回复")
                     return QueryResponse(
-                        code="1",
+                        code="0",
                         success=True,
                         response=final_reply,
                         tool_calls=tool_calls_info,
                         total_iterations=iteration_count
                     )
 
-                # 处理工具调用
-                print(f"🔧 模型决定调用 {len(tool_calls)} 个工具")
+                print(f"🔧 (第{tool_call_count} 轮工具调用）| 模型决定调用 {len(tool_calls)} 个工具")
                 messages.append(response_message)
 
                 # 执行所有工具调用
@@ -426,8 +454,8 @@ class AdvancedMCPHttpToolManager:
                     })
 
                 # 检查是否应该继续迭代
-                if iteration_count >= max_iterations:
-                    print("⚠️ 达到最大迭代次数，生成最终回复")
+                if tool_call_count >= max_iterations:
+                    print("⚠️ 达到最大工具调用次数，生成最终回复")
                     break
 
             except Exception as e:
@@ -452,7 +480,7 @@ class AdvancedMCPHttpToolManager:
 
             # 更新对话历史
             self.conversation_history.extend([
-                {"role": "user", "content": user_query},
+                {"role": "user", "content": question},
                 {"role": "assistant", "content": final_content}
             ])
 
